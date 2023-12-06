@@ -1,0 +1,306 @@
+import datetime
+import math
+import time
+# Data Manipulation 
+import numpy as np
+import pandas as pd
+
+# Visualization 
+import matplotlib.pyplot as plt
+import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D
+
+# Feature Selection and Encoding
+from sklearn.feature_selection import RFE, RFECV
+from sklearn.svm import SVR
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder, label_binarize
+
+# Machine learning 
+import sklearn.ensemble as ske
+from sklearn import datasets, model_selection, tree, preprocessing, metrics, linear_model
+from sklearn.svm import LinearSVC
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso, SGDClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+# Grid and Random Search
+import scipy.stats as st
+from scipy.stats import randint as sp_randint
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import RandomizedSearchCV
+from collections import Counter
+# Metrics
+from sklearn.metrics import precision_recall_fscore_support, roc_curve, auc
+
+# Managing Warnings 
+import warnings
+warnings.filterwarnings('ignore')
+
+from pyspark.sql import functions as F
+
+# Plot the Figures Inline
+%matplotlib inline
+
+#load dataset
+case_patient_level_all = spark.read.format("parquet").load("/mnt/case_patient_level_all_3y_0403")
+control_level_less_than_1935 = spark.read.format("parquet").load("/mnt/control_level_less_than_1935_0227")
+control_level_less_than_1940 = spark.read.format("parquet").load("/mnt/control_level_greater_than_1935_0227")
+control_level_less_than_1945 = spark.read.format("parquet").load("/mnt/control_level_greater_than_1940_0227")
+control_level_greater_than_1945 = spark.read.format("parquet").load("/mnt/control_level_greater_than_1945_0227")
+
+# feature group for lab tests
+
+metabolic_panel_group = ["ALP","ALT","AST","Sodium","Potassium","Creatinine","Urea_Nitrogen_3013682","Bilirubin_Total_3024128","eGFR_3049187","eGFR_3053283","Albumin_3024561","Protein_3020630"]
+blood_group = ["Lymphocytes_Leukocytes_3037511","Leukocytes_3000905","Erythrocyte_Ratio_3019897","Erythrocyte_Volume_3015182","Monocytes_Leukocytes_3011948","Eosinophils_Leukocytes_3010457","MCH_3012030","MCV_3023599","Neutrophils_3013650","Neutrophils_Leukocytes_3008342","Platelets","Hematocrit","MCHC_3009744","Calcium_3006906"]
+lipids_group = ["Cholesterol_Non_HDL","Cholesterolin_HDL_3007070","Cholesterol_3027114","Cholesterolin_LDL_3028288","Triglyceride_3022192"]
+sugar_group = ["Hemoglobin_A1c","Glucose_3004501"]
+Heart_group = ["Dia_BP_3012888","Sys_BP_3004249","O2_Sat_40762499","C02_3015632"]
+
+#Feature group for disease
+liver_dix = ["CANCER_LIVER","HCC_LIVER","LIVER_NAFLD","LIVER_NASH","ALCOHOLIC_RELATED_LIVER_DX","TOXIC_LIVER_DX","HEPATIC_FAILURE","NONINFECTIOUS_HEPATITIS","CIRRHOSIS","INFLAMMATORY_LIVER","ABSCESS_LIVER","AUTOIMMMUNE_HEPATITIS","LIVER_OTHER","LIVER_NEC"]
+diabetes_dix = ["DIABETES"]
+alcohol_dix = ["ALCOHOL"]
+#CVD- Known
+cvd_dix = ["CVD"]
+nicotine_dix = ["NICOTINE"]
+hot_flashes_dix = ["HOT_FLASHES","HOT_FLASHES_MP"]
+
+# select sub dataset with all the risk factors' value
+person_information_list_case  = [ 'CASE_CONTROL', 'GENDER', 'RACE_ETHNICITY','AGE_AD_FIRST_DIAG']
+person_information_list_control  = [ 'CASE_CONTROL', 'GENDER', 'RACE_ETHNICITY','AGE_LAST_OBS']
+disease_list = liver_dix + diabetes_dix + alcohol_dix + cvd_dix+ nicotine_dix + hot_flashes_dix 
+# basic_numeric_list = ['ADI', 'Hospital_Mortality']
+basic_numeric_list = ['ADI']
+person_information_continues = ['Body_Weight', 'Body_Height']
+# number of risk factors is 43
+risk_factors_selected = metabolic_panel_group + blood_group + lipids_group + sugar_group + BMI_group + calcium_group + Heart_group
+case_patient_level_all = case_patient_level_all.select(person_information_list_case+disease_list+basic_numeric_list+person_information_continues+risk_factors_selected)
+case_patient_level_all = case_patient_level_all.na.drop()
+display(case_patient_level_all)
+contrl_selected_less_than_1935 = control_level_less_than_1935.select(person_information_list_control+disease_list+basic_numeric_list+person_information_continues+risk_factors_selected)
+contrl_selected_less_than_1935 = contrl_selected_less_than_1935.na.drop()
+display(contrl_selected_less_than_1935)
+contrl_selected_less_than_1940 = control_level_less_than_1940.select(person_information_list_control+disease_list+basic_numeric_list+person_information_continues+risk_factors_selected)
+contrl_selected_less_than_1940 = contrl_selected_less_than_1940.na.drop()
+display(contrl_selected_less_than_1940)
+contrl_selected_less_than_1945 = control_level_less_than_1945.select(person_information_list_control+disease_list+basic_numeric_list+person_information_continues+risk_factors_selected)
+contrl_selected_less_than_1945 = contrl_selected_less_than_1945.na.drop()
+display(contrl_selected_less_than_1945)
+contrl_selected_greater_than_1945 = control_level_greater_than_1945.select(person_information_list_control+disease_list+basic_numeric_list+person_information_continues+risk_factors_selected)
+contrl_selected_greater_than_1945 = contrl_selected_greater_than_1945.na.drop()
+display(contrl_selected_greater_than_1945)
+
+def data_preprocessing(all_data,age_str):
+  all_data = all_data[((all_data['GENDER'] == "MALE") |(all_data['GENDER'] == "FEMALE"))]
+  all_data = all_data[(
+                        (all_data['RACE_ETHNICITY'] == "White") 
+                       |(all_data['RACE_ETHNICITY'] == "Asian")
+    |(all_data['RACE_ETHNICITY'] == "Hispanic or Latino")
+    |(all_data['RACE_ETHNICITY'] == "Black or African American")
+    |(all_data['RACE_ETHNICITY'] == "American Indian or Alaska Native")
+    |(all_data['RACE_ETHNICITY'] == "Native Hawaiian or Other Pacific Islander")
+                      )]
+  all_data = all_data[(all_data[age_str] >69)]
+  all_data = all_data[((all_data['CASE_CONTROL'] == "CASE") |(all_data['CASE_CONTROL'] == "CONTROL"))]
+#   all_data = all_data.drop(['GENETIC_SUSCEPTIBILITY', 'INTRACRANIAL_INJURY'], axis=1) 
+
+  all_data["liver_dix"] = all_data[liver_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  all_data["diabetes_dix"] = all_data[diabetes_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  all_data["alcohol_dix"] = all_data[alcohol_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  all_data["cvd_dix"] = all_data[cvd_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  all_data["nicotine_dix"] = all_data[nicotine_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  all_data["hot_flashes_dix"] = all_data[hot_flashes_dix].apply(lambda row: 1 if any(row == 1) else 0, axis=1)
+  new_df = all_data.drop(columns=disease_list)
+  print(new_df.shape)
+  return new_df
+case_patient_level_all_df = case_patient_level_all.toPandas()
+control_level_less_than_1935_df = contrl_selected_less_than_1935.toPandas()
+control_level_less_than_1940_df = contrl_selected_less_than_1940.toPandas()
+control_level_less_than_1945_df = contrl_selected_less_than_1945.toPandas()
+control_level_greater_than_1945_df = contrl_selected_greater_than_1945.toPandas()
+control_data_df = pd.concat([control_level_less_than_1935_df,control_level_less_than_1940_df,control_level_less_than_1945_df,control_level_greater_than_1945_df])
+case_patient_level_all_df['AGE_AD_FIRST_DIAG'] = case_patient_level_all_df['AGE_AD_FIRST_DIAG'].astype(int)
+case_data_df = data_preprocessing(case_patient_level_all_df,"AGE_AD_FIRST_DIAG")
+control_data_all_df = data_preprocessing(control_data_df,"AGE_LAST_OBS")
+
+case_counts = case_data_df.groupby(['AGE_AD_FIRST_DIAG', 'GENDER']).size()
+print(case_counts)
+control_counts = control_data_all_df.groupby(['AGE_LAST_OBS', 'GENDER']).size()
+print(control_counts)
+mean_age = case_data_df['AGE_AD_FIRST_DIAG'].mean()
+std_age = case_data_df['AGE_AD_FIRST_DIAG'].std()
+
+# Print the results
+print("Mean Age:", mean_age)
+print("Standard Deviation of Age:", std_age)
+case_counts_df = case_counts.reset_index(name='count')
+final_control_df = pd.DataFrame()
+for index, row in case_counts_df.iterrows():
+  if row['GENDER'] == "FEMALE":
+    query_str = 'AGE_LAST_OBS == ' + str(row['AGE_AD_FIRST_DIAG']) + " & GENDER == 'FEMALE'"
+  else:
+    query_str = 'AGE_LAST_OBS == ' + str(row['AGE_AD_FIRST_DIAG']) + " & GENDER == 'MALE'"
+  df_filtered = control_data_all_df.query(query_str)
+  df_sampled = df_filtered.sample(row['count'])
+  final_control_df = pd.concat([final_control_df, df_sampled])
+
+sampled_rows_counts = final_control_df.groupby(['AGE_LAST_OBS', 'GENDER']).size()
+print(sampled_rows_counts)
+
+final_control_df = final_control_df.rename(columns={'AGE_LAST_OBS': 'AGE'})
+case_data_df = case_data_df.rename(columns={'AGE_AD_FIRST_DIAG': 'AGE'})
+print(final_control_df.shape)
+print(case_data_df.shape)
+
+from sklearn.preprocessing import MinMaxScaler
+person_information_list_new  = [ 'GENDER','RACE_ETHNICITY','AGE']
+category_features = person_information_list_new + new_disease_list + basic_numeric_list
+numerical_features = risk_factors_selected + person_information_continues
+all_data_enc= all_data.copy()
+all_data_enc['CASE_CONTROL'] = all_data_enc['CASE_CONTROL'].map({'CASE': 1, 'CONTROL': 0})
+all_data_enc[numerical_features] = MinMaxScaler().fit_transform(all_data[numerical_features])
+all_data_enc = pd.get_dummies(all_data_enc, columns=category_features)
+all_data_enc.head()
+
+import matplotlib.pyplot as plt
+def draw_importance_figure_ori(model_importance, plot_index):
+  coefs = pd.DataFrame(
+     model_importance,
+     columns=['Coefficients'], index=plot_index
+  )
+  
+  coefs.plot(kind='barh', figsize=(20, 30))
+  plt.axvline(x=0, color='.5')
+  plt.subplots_adjust(left=.3)
+def save_cof_list_for_lr(model_importance, plot_index,file_path):
+  data = { 'Feature_names': plot_index,'Coefficients': model_importance}
+  coefs = pd.DataFrame(data)
+  cof_lr_spark_df=spark.createDataFrame(coefs)
+  cof_lr_spark_df.write.mode("overwrite").parquet(file_path)
+def draw_importance_figure(model_importance, plot_index):
+  plt.style.use('seaborn-whitegrid')
+  model_importance = pd.DataFrame(model_importance, index=plot_index, columns=["Importance"])
+  model_feature_rank = model_importance.sort_values(by='Importance', ascending=True).index.tolist()
+  model_importance.sort_values(by='Importance', ascending=True).plot(kind='barh', figsize=(20,len(model_importance)/2))
+  return model_feature_rank
+
+def get_feature_rank_three_alg(data_x,data_y,file_path,top_n=25):
+  print("top_n:"+str(top_n))
+  rf_clf = RandomForestClassifier()
+  rf_clf.fit(data_x, data_y)
+  rf_importance = abs(rf_clf.feature_importances_)
+  print("RF")
+  draw_importance_figure_ori(rf_clf.feature_importances_,data_x.columns)
+  rf_feature_rank = draw_importance_figure(rf_importance,data_x.columns)
+  lr_clf = LogisticRegression()
+  lr_clf.fit(data_x, data_y)
+  lr_importance = abs(lr_clf.coef_[0])
+  print("LR")
+  draw_importance_figure_ori(lr_clf.coef_[0],data_x.columns)
+  # only for all features, not for others, if run other experiments, please remove this line
+  save_cof_list_for_lr(lr_clf.coef_[0],data_x.columns,file_path)
+  lr_feature_rank = draw_importance_figure(lr_importance,data_x.columns)
+  dt_clf = DecisionTreeClassifier()
+  dt_clf.fit(data_x, data_y)
+  
+  print("GBDT")
+  gbdt_clf = GradientBoostingClassifier()
+  gbdt_clf.fit(data_x, data_y)
+  gbdt_importance = abs(gbdt_clf.feature_importances_)
+  draw_importance_figure_ori(gbdt_clf.feature_importances_,data_x.columns)
+  gbdt_feature_rank = draw_importance_figure(gbdt_importance,data_x.columns)
+  # print(linearSVC_feature_rank[:15])
+  all_feature_rank_list = rf_feature_rank[-top_n:] + lr_feature_rank[-top_n:] + gbdt_feature_rank[-top_n:]
+  # print(all_feature_rank_list)
+  re = Counter(all_feature_rank_list)
+  print(re.most_common())
+
+from sklearn.model_selection import cross_val_score
+# Function that runs the requested algorithm and returns the accuracy metrics
+def fit_ml_algo(algo, X, y):
+    # One Pass
+    scores = cross_val_score(algo, X, y, cv=10)
+    acc_mean = round(scores.mean()*100,2)
+    acc_std = round(scores.std()*100,2)
+    return acc_mean,acc_std
+def accuracy_five_algo(data,target):
+  acc_gbdt,acc_std_gbdt = fit_ml_algo(GradientBoostingClassifier(), data, target)
+  acc_lr,acc_std_lr = fit_ml_algo(LogisticRegression(n_jobs = -1), data, target)
+  acc_svc,acc_std_svc = fit_ml_algo(LinearSVC(), data, target)
+  rfc = RandomForestClassifier(n_estimators=10, 
+                             min_samples_leaf=2,
+                             min_samples_split=17, 
+                             criterion='gini', 
+                             max_features=8)
+  acc_rf,acc_std_rf = fit_ml_algo(rfc, data, target)
+  acc_dt,acc_std_dt = fit_ml_algo(DecisionTreeClassifier(), data, target)
+  models = pd.DataFrame({
+    'Model': ['Logistic Regression', 
+              'Linear SVC', 
+              'Gradient Boosting Decision Trees',
+             'Random Forest',
+             'Decision Tree'],
+    'Score': [
+        acc_lr, 
+        acc_svc, 
+        acc_gbdt,
+      acc_rf,
+      acc_dt
+    ],
+    'Standard deviation':[
+      acc_std_lr,
+      acc_std_svc,
+      acc_std_gbdt,
+      acc_std_rf,
+      acc_std_dt
+    ]})
+  print(models.sort_values(by='Score', ascending=False))
+# all features
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop('CASE_CONTROL', axis=1)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_disease_group",int((all_data_enc.shape[1]-1)/3))
+
+#drop metabolic_panel_group 
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop(['CASE_CONTROL']+metabolic_panel_group, axis=1)
+print(data_x_all.shape)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_drop_metabolic",int((all_data_enc.shape[1]-1)/3))
+
+# drop blood_group
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop(['CASE_CONTROL']+blood_group, axis=1)
+print(data_x_all.shape)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_drop_blood",int((all_data_enc.shape[1]-1)/3))
+
+# drop lipids_group
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop(['CASE_CONTROL']+lipids_group, axis=1)
+print(data_x_all.shape)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_drop_lipid",int((all_data_enc.shape[1]-1)/3))
+
+# drop sugar_group 
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop(['CASE_CONTROL']+sugar_group, axis=1)
+print(data_x_all.shape)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_drop_sugar",int((all_data_enc.shape[1]-1)/3))
+
+# drop Heart_group
+print(all_data_enc.shape)
+data_x_all = all_data_enc.drop(['CASE_CONTROL']+Heart_group, axis=1)
+print(data_x_all.shape)
+data_y_all = all_data_enc['CASE_CONTROL']
+accuracy_five_algo(data_x_all,data_y_all)
+get_feature_rank_three_alg(data_x_all,data_y_all,"/mnt/cof_lr_df_3y_drop_Heart",int((all_data_enc.shape[1]-1)/3))
